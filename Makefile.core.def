@@ -1,0 +1,6 @@
+AutoGen definitions Makefile.tpl;
+
+module = {
+  name = read2env;
+  common = contrib/grub-read-file-to-env/read_to_env.c;
+};
