@@ -45,7 +45,7 @@ utf16_to_ascii(grub_uint8_t *data, grub_size_t size){
   bool is_utf16 = big_endian || little_endian;
 
   if(!is_utf16){
-    return THROW(GRUB_ERR_BAD_ARGUMENT, "data is not utf16-encoded");
+    THROW(GRUB_ERR_BAD_ARGUMENT, "data is not utf16-encoded");
   }
 
   grub_uint16_t *utf_16_data = (grub_uint16_t*)(data + sizeof(BOM));
