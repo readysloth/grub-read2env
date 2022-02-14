@@ -6,55 +6,49 @@
 #include <grub/env.h>
 #include <grub/file.h>
 #include <grub/extcmd.h>
+#include <grub/charset.h>
 
 typedef int bool;
 
-#define RAISE_EXCEPTION_IF_ANY(MSG) \
+#define RAISE_EXCEPTION_IF_ANY(MSG, ...) \
   if(grub_errno != GRUB_ERR_NONE){ \
-    if(MSG || MSG[0] != '\0'){ \
+    if(MSG && MSG[0] != '\0'){ \
       grub_printf(MSG"\n"); \
     } \
     else{ \
       grub_print_error(); \
     } \
+    __VA_ARGS__; \
     return grub_errno; \
   }
 
 #define THROW(ERR, MSG) grub_error(ERR, MSG); RAISE_EXCEPTION_IF_ANY("")
-#define POSSIBLE_THROW(MSG, BODY) BODY; RAISE_EXCEPTION_IF_ANY(MSG)
+#define POSSIBLE_THROW(MSG, BODY, ...) BODY; RAISE_EXCEPTION_IF_ANY(MSG, __VA_ARGS__)
 
 
 GRUB_MOD_LICENSE ("GPLv3+");
 
 static const struct grub_arg_option options[] = {
-    {"path",  'p', 0, "path to file",           NULL,      ARG_TYPE_FILE},
-    {"set",   's', 0, "name of variable",       "VARNAME", ARG_TYPE_STRING},
-    {"utf16", 'u', 0, "is file utf16-encoded",  NULL,      ARG_TYPE_NONE},
+    {"path",  'p', 0, "path to file",                       NULL,      ARG_TYPE_FILE},
+    {"set",   's', 0, "name of variable",                   "VARNAME", ARG_TYPE_STRING},
+    {"utf16", 'u', 0, "is file utf16-encoded",              NULL,      ARG_TYPE_NONE},
+    {"debug", 'd', 0, "print variable contents before set", NULL,      ARG_TYPE_NONE},
     {0, 0, 0, 0, 0, 0}
 };
 
 static grub_extcmd_t cmd;
 
-static grub_err_t
-utf16_to_ascii(grub_uint8_t *data, grub_size_t size){
-  grub_uint8_t *data_start = data;
 
-  grub_uint16_t BOM = *(grub_uint32_t*)(data);
-  bool big_endian = BOM == 0xFEFF;
-  bool little_endian = BOM == 0xFFFE;
-  bool is_utf16 = big_endian || little_endian;
-
-  if(!is_utf16){
-    THROW(GRUB_ERR_BAD_ARGUMENT, "data is not utf16-encoded");
+static grub_uint8_t*
+utf16_to_ascii(grub_uint8_t* dest, grub_uint8_t* src, grub_size_t size){
+  for(grub_size_t i = 0, j = 0; j < size; j++){
+    if(grub_isprint(src[j])){
+      dest[i++] = src[j];
+    }
   }
-
-  grub_uint16_t *utf_16_data = (grub_uint16_t*)(data + sizeof(BOM));
-  for(grub_size_t i = 0; i < size; i++){
-    int char_index = little_endian ? 1 : 0;
-    data_start[i] = ((grub_uint8_t*)utf_16_data++)[char_index];
-  }
-  return GRUB_ERR_NONE;
+  return dest;
 }
+
 
 static grub_err_t
 grub_cmd_read2env(grub_extcmd_context_t ctxt,
@@ -67,6 +61,7 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
   }
   char *path_to_file = state[0].arg;
   char *env_name = state[1].arg;
+  grub_uint8_t *read_buf = NULL;
   grub_uint8_t *env_buf = NULL;
 
   POSSIBLE_THROW("file open failed",
@@ -74,9 +69,13 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
   grub_size_t buffer_size = file->size;
 
   POSSIBLE_THROW("can't allocate memory for file",
-                 env_buf = grub_malloc(buffer_size));
+                 read_buf = grub_malloc(buffer_size),
+                 grub_file_close(file));
+
   POSSIBLE_THROW("error occured in file read",
-                 grub_ssize_t count = grub_file_read(file, env_buf, file->size));
+                 grub_ssize_t count = grub_file_read(file, read_buf, buffer_size),
+                 grub_free(read_buf),
+                 grub_file_close(file));
 
   if(!count){
     THROW(GRUB_ERR_EOF, "0 bytes read from file");
@@ -84,16 +83,29 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
 
   err = grub_file_close(file);
   if(err != GRUB_ERR_NONE){
+    grub_free(env_buf);
     THROW(err, "error occured while closing the file");
   }
 
   if(state[2].set){
-    utf16_to_ascii(env_buf, buffer_size);
+    env_buf = utf16_to_ascii(read_buf, read_buf, buffer_size);
+  }
+  else{
+    env_buf = read_buf;
+  }
+
+  if(state[3].set){
+    grub_printf("%s=\"%s\"\n", env_name, env_buf);
+    grub_printf("xxd(%s)=\"", env_name);
+    for(grub_size_t i = 0; i < buffer_size; i++){
+      grub_printf("%x", env_buf[i]);
+    }
+    grub_printf("\"\n");
   }
 
   err = grub_env_set(env_name, (char*)env_buf);
-  THROW(err, "environment variable set failed");
   grub_free(env_buf);
+  THROW(err, "environment variable set failed");
   return GRUB_ERR_NONE;
 }
 
@@ -104,7 +116,7 @@ GRUB_MOD_INIT(read)
                              grub_cmd_read2env,
                              0,
                              NULL,
-                             "Sets variable with file contents.",
+                             "Set variable with file contents.",
                              options);
 }
 
