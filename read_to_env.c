@@ -15,9 +15,6 @@ typedef int bool;
     if(MSG && MSG[0] != '\0'){ \
       grub_printf(MSG"\n"); \
     } \
-    else{ \
-      grub_print_error(); \
-    } \
     __VA_ARGS__; \
     return grub_errno; \
   }
@@ -61,15 +58,20 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
   }
   char *path_to_file = state[0].arg;
   char *env_name = state[1].arg;
+  grub_size_t buffer_size = 0;
   grub_uint8_t *read_buf = NULL;
   grub_uint8_t *env_buf = NULL;
 
   POSSIBLE_THROW("file open failed",
                  grub_file_t file = grub_file_open(path_to_file, GRUB_FILE_TYPE_NONE));
-  grub_size_t buffer_size = file->size;
+  buffer_size = file->size;
+  if(!buffer_size){
+    grub_printf("File is empty, environment variable wouldn't be set\n");
+    return GRUB_ERR_NONE;
+  }
 
   POSSIBLE_THROW("can't allocate memory for file",
-                 read_buf = grub_malloc(buffer_size),
+                 read_buf = grub_calloc(buffer_size, sizeof(grub_uint8_t)),
                  grub_file_close(file));
 
   POSSIBLE_THROW("error occured in file read",
@@ -77,8 +79,8 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
                  grub_free(read_buf),
                  grub_file_close(file));
 
-  if(!count){
-    THROW(GRUB_ERR_EOF, "0 bytes read from file");
+  if(count < 0 || (grub_size_t)count < buffer_size){
+    THROW(GRUB_ERR_EOF, "file read ended in wrong size");
   }
 
   err = grub_file_close(file);
@@ -98,7 +100,7 @@ grub_cmd_read2env(grub_extcmd_context_t ctxt,
     grub_printf("%s=\"%s\"\n", env_name, env_buf);
     grub_printf("xxd(%s)=\"", env_name);
     for(grub_size_t i = 0; i < buffer_size; i++){
-      grub_printf("%x", env_buf[i]);
+      grub_printf("%02X", env_buf[i]);
     }
     grub_printf("\"\n");
   }
